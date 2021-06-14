@@ -1,0 +1,558 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+Master Thesis - "Predicting the popularity of songs based on their audio features"
+
+Student: Julien Pflüger
+Student number: 571630
+Study program: MScBA Business Analytics & Management
+Rotterdam School of Management (EUR)
+
+################################################################################
+
+Loading the libraries.
+```{r include=FALSE}
+library(data.table)
+library(readr)
+library(lubridate)
+library(dplyr)
+library(tidyverse)
+library(stargazer)
+library(ggplot2)
+library(xtable)
+library(cowplot)
+library(olsrr)
+library(tseries)
+library(readr)
+# ML-specific libraries
+library(tidymodels)
+library(themis)
+library(knitr)
+library(ranger)
+library(doParallel)
+library(vip)
+library(skimr)
+library(corrplot)
+library(ggridges)
+library(DALEX)
+library(party)
+library(caret)
+```
+
+Loading the tracks-dataset into the global environment.
+```{r include=FALSE}
+tracks <- read_csv("~/Desktop/Spotify Dataset.zip/tracks.csv")
+
+# convert datasets into df
+tracks <- as.data.frame(tracks)
+```
+
+Looking at different general characteristics of the dataset, such as the number of unique tracks and artists as well as the minimum duration of any track contained in the set to ensure that there are none mistakenly included that have a length of 0.
+```{r}
+# check the number of unique track IDs and artists
+length(unique(tracks$id))
+length(unique(tracks$artists))
+
+# check the shortest duration of any track contained in the dataset to ensure that there are none with 0 length
+min(tracks$duration_ms)
+```
+
+Standardize the date-format for all rows by removing "day" and "month", thus only keeping the year information.
+```{r include=FALSE}
+tracks$release_year <- str_trunc(tracks$release_date, 7, side = "right")
+tracks$release_year <- gsub("\\...*$","", tracks$release_year)
+tracks$release_year <- as.numeric(tracks$release_year)
+```
+
+Subset more contemporary songs, released since 2000 and thus from 2000-2021.
+The reasoning behind this subset is to account for differences in taste and popular songs throughout history e.g. around 1920 the most popular songs belonged to the genres "Operas" and "Marches"  while around 2020 the most popular genres are arguably "Hip-Hop/Rap" and "Techno".
+```{r}
+tracks.2k <- subset(tracks, release_year >= "2000")
+```
+
+Transform the duration of a song from milliseconds to seconds for sake of interpretability (e.g., looking at the descriptive statistics).
+```{r include=FALSE}
+tracks.2k$duration_ms <- tracks.2k$duration_ms*0.001
+# change the column name accordingly
+colnames(tracks.2k)[4] <- "duration_seconds"
+```
+
+Filter out only those variables of interest.
+```{r include=FALSE}
+tracks.2k <- tracks.2k %>%
+  select(id, name, popularity, duration_seconds, explicit,
+         artists, danceability, energy, key, loudness, mode,
+         speechiness, acousticness, instrumentalness, liveness,
+         valence, tempo, release_year)
+```
+
+Creating a histogram of the frequency of each popularity score over the subset tracks.2k.
+```{r}
+ggplot(data = tracks.2k, aes(x=popularity)) + geom_histogram(bins = 30, fill = "cornflowerblue", color = "black") + ggtitle("Popularity Distribution")
+
+# checking the frequency of popularity in terms of counts 
+tracks.2k %>% 
+  group_by(popularity) %>% 
+  summarise(counts = n())
+```
+
+As can be seen, the overall distribution of popularity seems relatively normal. However, several songs seem to have a popularity rank of 0. 
+Considering that a score of 0 infers that the song has neither been played recently nor frequently, songs with a score of 0 are removed from the dataset.
+```{r include=FALSE}
+tracks.2k <- tracks.2k[tracks.2k$popularity>0, ]
+```
+
+Looking at the new number of unique artists and tracks contained in the updated sample.
+```{r}
+# checking the number of unique songs and artists of the filtered subset
+length(unique(tracks.2k$id))
+length(unique(tracks.2k$artists))
+```
+
+Checking whether the tracks.2k subset contains any missing values (i.e., NAs) to handle if necessary.
+```{r}
+# FALSE means there are no NAs; TRUE means there are some indeed
+any(is.na(tracks.2k))
+```
+
+Looking at the new histogram of popularity after removing the songs with a popularity score of 0.
+```{r}
+ggplot(data = tracks.2k, aes(x=popularity)) + geom_histogram(bins = 30, fill = "cornflowerblue", color = "black") + ggtitle("Popularity Distribution")
+
+# checking the frequency of popularity in terms of counts 
+tracks.2k %>% 
+  group_by(popularity) %>% 
+  summarise(counts = n())
+```
+
+Looking at the descriptive statistics of the final subset tracks.2k and the structure of each variable in case some variable type needs to be transformed.
+```{r}
+# structure of tracks.2k
+str(tracks.2k)
+# all variables of interest are numeric, so no need to transform any of them
+
+# stargazer format
+stargazer(tracks.2k, 
+          type = "text", min.max = TRUE, mean.sd = TRUE, 
+          nobs = FALSE, median = FALSE, iqr = FALSE,
+          digits = 3, align = TRUE,
+          title = "Summary Statistics")
+```
+
+Looking at the other variables' histograms to get a better impression of their distribution.
+```{r}
+# subsetting only the predictors from tracks.2k
+df.predictors <- tracks.2k %>% 
+  select(duration_seconds, explicit, danceability, 
+         energy, key, loudness, mode, speechiness, acousticness, 
+         instrumentalness, liveness, valence, tempo, release_year)
+
+# creating a list to contain all individual histogram objects
+myplots <- list()
+
+# creating a loop to create a histogram for each individual predictor
+for (i in 1:ncol(df.predictors)) {
+  col <- names(df.predictors)[i]
+  ggp <- ggplot(df.predictors, aes_string(x = col)) +
+    geom_histogram(bins = 30, fill = "cornflowerblue", color = "black") 
+  # + geom_vline(xintercept = mean(df.predictors[[col]]), col = "red", lwd=1.5) 
+  myplots[[i]] <- ggp
+}
+
+# plotting all predictor histograms together in one grid
+plot_grid(plotlist = myplots, label_size = 10)
+
+# removing the objects no longer required
+df.predictors <- NULL
+myplots <- NULL
+ggp <- NULL
+```
+
+##############################
+##### Splitting the data #####
+##############################
+
+Splitting the data into train and test set after setting a random seed to allow for a reproducibility of the exact same analysis.
+NOTE: the argument "strata" allows for a popularity distribution across the train-test split that is close to that of the original/entire dataset.
+```{r include=FALSE}
+set.seed(030197)
+tracks.2k.split <- initial_split(data = tracks.2k, prop = 0.7, 
+                          strata = popularity)
+
+# the individual sets are defined and can be found below
+tracks.2k.train <- training(tracks.2k.split)
+tracks.2k.test <- testing(tracks.2k.split)
+```
+
+The distribution of individual popularity scores within the train- and test-set can be found below. As can be drawn from the dataframes obtained, the distribution of popularity seems to be approximately equal across the train-test split.
+```{r}
+### The code provides an overview about whether the split is accurately stratified
+tracks.2k.train %>% count(popularity) %>% 
+  mutate(prop = n / sum(n))
+
+tracks.2k.test %>% count(popularity) %>% 
+  mutate(prop = n / sum(n))
+```
+
+################################################################################
+################################################################################
+################# R A N D O M   F O R E S T - M O D E L I N G ##################
+################################################################################
+################################################################################
+
+The model is tuned on the training data using 10-fold stratified cross validation. Therefore, the folds are created in the following chunk.
+```{r}
+set.seed(1995)
+cv.folds.no.year <- tracks.2k.train %>% vfold_cv(v = 10, strata = popularity)
+```
+
+Having created the necessary train-test split and CV-folds based on popularity, a recipe including all 13 predictors of interest in the train set model is created for the random forest.
+```{r}
+rf.recipe.no.year <- recipe(popularity ~ duration_seconds + explicit + danceability + energy 
+                    + key + loudness + mode + speechiness + acousticness + instrumentalness
+                    + liveness + valence + tempo, data = tracks.2k.train) 
+rf.recipe.no.year
+```
+
+Below, the RF model is specified to use 500 trees, a number of trees that can be reasonably assumed to be sufficient for random forests. 
+Additionally, the argument "mtry" specifies the number of predictors the model uses for each split. Since the argument is set to tune(), the algorithm autonomously tests each potential number of variables available for each split.
+```{r include=FALSE}
+rf.model.tune.no.year <- rand_forest(mtry = tune(), trees = 500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+```
+
+Having defined the model, the workflow can be created, which combines both the recipe and the model. This workflow can also be tuned later on.
+```{r}
+rf.tune.wf.no.year <- workflow() %>%
+  add_recipe(rf.recipe.no.year) %>%
+  add_model(rf.model.tune.no.year)
+
+rf.tune.wf.no.year
+```
+
+To enable an assessment of the predictive performance of the random forest model, the error metrics "Root-mean-square error", "R squared" and "Mean absolute error" are used. These metrics are relatively conventional for a regression.
+```{r include=FALSE}
+regression.metrics <- metric_set(rmse, rsq_trad, mae)
+```
+
+To ensure a smoother and quicker running of the subsequent tasks, the use of multiple CPU cores is initiated using the "doParallel"-function. That way, each CPU can create individual decision trees in parallel.
+NOTE: since the computer this analysis is conducted on is not able to cool down all cores when using them and instead crashes mid-analysis, the function was not used. As a result, the subsequent model tuning took around 20h. To use the function, simply remove the hashtag (#) and run the chunk.
+```{r}
+# registerDoParallel()
+```
+
+In the following sequence, the model is tuned using the "tune_grid"-function and 10-fold cross-validation, based on the aforementioned performance/error metrics. The tune grid is set from 1 to 13, as the model features 13 independent variables.
+```{r include=FALSE}
+set.seed(11834919)
+rf.tune.res.no.year <- tune_grid(
+  rf.tune.wf.no.year,
+  resamples = cv.folds.no.year,
+  grid = tibble(mtry = 1:13),
+  metrics = regression.metrics
+)
+```
+
+Saving the object "rf.tune.res.no.year" so it can be simply loaded (making it quicker) in the future.
+```{r include=FALSE}
+saveRDS(rf.tune.res.no.year , "rf.tune.res.no.year.RDS")
+```
+
+Having tuned the model, the individual metrics calculated using the 10-fold cross-validation are shown below. Thus, each of the 10 models created has different values for those metrics.
+```{r}
+error.metrics.no.year <- rf.tune.res.no.year %>%
+  collect_metrics()
+
+error.metrics.no.year
+```
+
+In the next chunk of code, the increase or decrease of each error metric for a given number of variables used for splitting (i.e., the mtry-value) is plotted.The plot represents all mtry-values from 1 to 13, since the latter is the maximum number of variables the model can potentially consider at each split.
+```{r}
+rf.tune.res.no.year %>%
+  collect_metrics() %>%
+  filter(.metric %in% c("mae", "rmse", "rsq_trad")) %>%
+  ggplot(aes(x = mtry, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y")
+```
+
+The plot above provides a visual representation of the change in value of all 3 error metrics based on differing numbers of variables at disposal for each split (i.e., the mtry-value).
+Following this, the optimal number of variables is computationally chosen using the optimal R-squared value in the following chunk of code (it does not really matter which metric is chosen since the plot seems to show rather "similar" curves for each one of them) and subsequently spliced into the final workflow.
+```{r}
+best.rsq_trad.no.year <- select_best(rf.tune.res.no.year, "rsq_trad")
+rf.final.wf.no.year <- finalize_workflow(rf.tune.wf.no.year, best.rsq_trad.no.year)
+rf.final.wf.no.year
+```
+
+Having updated the random forest model in the previous chunk using the best possible R-squared, one can see that the optimal number of variables to use at each split is 4.
+Following this, the model is trained again on the train-set and ultimately used and tested for predicting the test-set values.
+```{r}
+set.seed(0905)
+final.res.no.year <- rf.final.wf.no.year %>% 
+  last_fit(tracks.2k.split, metrics = regression.metrics)
+```
+
+The next chunk shows the value of each error metric for the predictions made on the test set.
+```{r}
+rf.test.performance.no.year <- final.res.no.year %>%
+  collect_metrics()
+
+rf.test.performance.no.year
+```
+
+Extracting the predictions made by the RF in order to calculate the residuals.
+```{r}
+# collecting the predictions made by the RF on the test-set
+rf.predictions.no.year <- final.res.no.year %>% collect_predictions()
+
+# calculating the residuals by subtracting the predictions made from the actual popularity score
+rf.predictions.no.year$residuals <- rf.predictions.no.year$popularity - rf.predictions.no.year$.pred
+```
+
+In the next chunk, the residuals are plotted in two different styles to help visualize them and make inferences about the generalizability of the model.
+```{r}
+# residuals for each observation
+plot(rf.predictions.no.year$residuals, type = "prediction", abline = TRUE,
+     xlab = "Observations", ylab = "Residuals")
+
+# histogram of the residuals
+ggplot(data = rf.predictions.no.year, aes(x=residuals)) + geom_histogram(bins = 30, fill = "cornflowerblue", color = "black") + ggtitle("Residuals Histogram") + xlab("Residuals") + ylab("Count")
+```
+
+################################################################################
+################################################################################
+#################### V A R I A B L E   I M P O R T A N C E #####################
+################################################################################
+################################################################################
+
+In order to obtain measures concerning the  variable importance of each predictors, the random forest model needs to be run again with the additional argument "importance".
+Since the previously computed optimal value of mtry equals 4, this information is manually added to the code at this point.
+```{r}
+rf.model.var.importance.no.year <- rand_forest(mtry = 4, trees = 500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger", importance = "permutation")
+```
+
+To run this new model containing variable importance information, a new workflow is created.
+```{r}
+rf.var.importance.wf.no.year <- workflow() %>% 
+  add_model(rf.model.var.importance.no.year) %>%
+  add_recipe(rf.recipe.no.year)
+```
+
+Having established the new workflow, the new model is fitted on the train set. To do this, the same seed as previously used to assess the model's test set performance needs to be specified. 
+```{r}
+set.seed(0905)
+rf.var.importance.fit.no.year <- rf.var.importance.wf.no.year %>% fit(data = tracks.2k.train)
+```
+
+Ultimately, the measures of variable importance can be excerpted and visualized.
+```{r}
+# excerpting the variable importance measures
+rf.var.importance.fit.no.year %>% pull_workflow_fit() %>% vi()
+
+# plotting the variable importance
+rf.var.importance.fit.no.year %>% pull_workflow_fit() %>% vip(geom = "point", num_features = 10)
+```
+
+################################################################################
+################################################################################
+############# M U L T I P L E   L I N E A R   R E G R E S S I O N ##############
+################################################################################
+################################################################################
+
+In the next chunk, a multiple linear regression is created on the same train-set as the RF model in order to obtain a (simpler) baseline to compare the performance of the  more complex RF model against.
+```{r}
+lm.popularity <- lm(popularity ~ duration_seconds + explicit + danceability + energy 
+                    + key + loudness + mode + speechiness + acousticness + instrumentalness
+                    + liveness + valence + tempo, data = tracks.2k.train) 
+
+stargazer(lm.popularity, type = "text")
+```
+
+Based on the created linear regression, the popularity of the test-set observations can be predicted using the function predict().
+```{r include=FALSE}
+lm.predictions <- lm.popularity %>% predict(tracks.2k.test)
+```
+
+In the following chunk, the error metrics of the linear model are shown.
+```{r}
+# rmse
+RMSE(lm.predictions, tracks.2k.test$popularity)
+
+# R-squared
+R2(lm.predictions, tracks.2k.test$popularity)
+
+# mae
+MAE(lm.predictions, tracks.2k.test$popularity)
+```
+
+################################################################################
+################################################################################
+############# R F -  C O M P A R I T I V E   P E R F O R M A N C E #############
+################################################################################
+################################################################################
+
+As a last analysis, the performance of the previously created RF is compared against one created on a sample solely containing tracks from 2021 (as these are the most up-to-date ones).
+This is done to assess whether the predictive performance holds when tested on a much narrower, time-based subset.
+```{r}
+tracks.2021 <- subset(tracks.2k, release_year == 2021)
+```
+
+Looking at the number of unique songs and artists in tracks.2021.
+```{r}
+length(unique(tracks.2021$id))
+length(unique(tracks.2021$artists))
+```
+
+
+In the next chunks, the same procedure for data splitting and RF modeling as applied for the previous model is undertaken.
+```{r include=FALSE}
+set.seed(290300)
+tracks.2021.split <- initial_split(data = tracks.2021, prop = 0.7, 
+                          strata = popularity)
+
+# the individual sets are defined and can be found below
+tracks.2021.train <- training(tracks.2021.split)
+tracks.2021.test <- testing(tracks.2021.split)
+```
+
+```{r}
+set.seed(2000)
+cv.folds.2021 <- tracks.2021.train %>% vfold_cv(v = 10, strata = popularity)
+```
+
+Having created the necessary train-test split and CV-folds based on popularity, a recipe including all 13 predictors of interest in the train set model is created for the random forest.
+```{r}
+rf.recipe.2021 <- recipe(popularity ~ duration_seconds + explicit + danceability + energy 
+                    + key + loudness + mode + speechiness + acousticness + instrumentalness
+                    + liveness + valence + tempo, data = tracks.2021.train) 
+rf.recipe.2021
+```
+
+```{r include=FALSE}
+rf.model.tune.2021 <- rand_forest(mtry = tune(), trees = 500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+```
+
+```{r}
+rf.tune.wf.2021 <- workflow() %>%
+  add_recipe(rf.recipe.2021) %>%
+  add_model(rf.model.tune.2021)
+
+rf.tune.wf.2021
+```
+
+```{r}
+registerDoParallel()
+```
+
+```{r include=FALSE}
+set.seed(4455)
+rf.tune.res.2021 <- tune_grid(
+  rf.tune.wf.2021,
+  resamples = cv.folds.2021,
+  grid = tibble(mtry = 1:13),
+  metrics = regression.metrics
+)
+```
+
+```{r include=FALSE}
+saveRDS(rf.tune.res.2021 , "rf.tune.res.2021.RDS")
+```
+
+Having tuned the model, the individual metrics calculated using the 10-fold cross-validation are shown below. Thus, each of the 10 models created has different values for those metrics.
+```{r}
+error.metrics.2021 <- rf.tune.res.2021 %>%
+  collect_metrics()
+
+error.metrics.2021
+```
+
+```{r}
+rf.tune.res.2021 %>%
+  collect_metrics() %>%
+  filter(.metric %in% c("mae", "rmse", "rsq_trad")) %>%
+  ggplot(aes(x = mtry, y = mean, ymin = mean - std_err, ymax = mean + std_err, 
+             colour = .metric)) +
+  geom_errorbar() + 
+  geom_line() +
+  geom_point() +
+  facet_grid(.metric ~ ., scales = "free_y")
+```
+
+```{r}
+best.rsq_trad.2021 <- select_best(rf.tune.res.2021, "rsq_trad")
+rf.final.wf.2021 <- finalize_workflow(rf.tune.wf.2021, best.rsq_trad.2021)
+rf.final.wf.2021
+```
+
+Once again, the random forest model having been updated in the previous chunk using the best possible R-squared, one can see that the optimal number of variables to use at each split is 4.
+```{r}
+set.seed(0461)
+final.res.2021 <- rf.final.wf.2021 %>% 
+  last_fit(tracks.2021.split, metrics = regression.metrics)
+```
+
+```{r}
+rf.test.performance.2021 <- final.res.2021 %>%
+  collect_metrics()
+
+rf.test.performance.2021
+```
+
+################################################################################
+################################################################################
+#################### V A R I A B L E   I M P O R T A N C E #####################
+################################################################################
+################################################################################
+
+```{r}
+rf.model.var.importance.2021 <- rand_forest(mtry = 4, trees = 500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger", importance = "permutation")
+```
+
+```{r}
+rf.var.importance.wf.2021 <- workflow() %>% 
+  add_model(rf.model.var.importance.2021) %>%
+  add_recipe(rf.recipe.2021)
+```
+
+```{r}
+set.seed(0461)
+rf.var.importance.fit.2021 <- rf.var.importance.wf.2021 %>% fit(data = tracks.2021.train)
+```
+
+Ultimately, the measures of variable importance can be excerpted and visualized.
+```{r}
+# excerpting the variable importance measures
+rf.var.importance.fit.no.year %>% pull_workflow_fit() %>% vi()
+
+# plotting the variable importance
+rf.var.importance.fit.no.year %>% pull_workflow_fit() %>% vip(geom = "point", num_features = 10)
+```
+
+
+```{r include=FALSE}
+write.csv(tracks.2k, row.names = FALSE)
+
+write.csv(tracks.2021, row.names = FALSE)
+```
+
+
+
+```{r}
+rf.predictions.2021 <- final.res.2021 %>% collect_predictions()
+
+rf.predictions.2021$residuals <- rf.predictions.2021$popularity - rf.predictions.2021$.pred
+
+plot(rf.predictions.2021$residuals, type = "prediction", abline = TRUE, xlab = "Observations", ylab = "Residuals")
+```
+
