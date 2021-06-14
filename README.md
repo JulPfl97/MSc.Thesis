@@ -1,4 +1,4 @@
-# MSc Thesis - Popularity prediction
+# MSc Thesis - Music Popularity prediction
 
 
 This repository contains an R-notebook for the music popularity prediction performed as part of my MSc Thesis in Business Analytics and Management at the Rotterdam School of Management (EUR).
