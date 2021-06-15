@@ -8,4 +8,7 @@ To make more nuanced inferences, the performance of the RF is compared to that o
 
 Ultimately, the RF is also used to render a Variable Importance (VI) score for each independent variable.
 
-Note: considering that Github only allows the upload of files of up to 50MB, only the subsets with the songs of 2000-2021 and 2021 are uploaded. The original complete dataset "tracks.csv" can be found on https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks.
+
+Notes:
+- the results displayed in the uploaded HTML-file deviate from the results described and shown in the Thesis paper, as the code needed to be run again to knit the Rmd-document to HTML. These deviations are due to the fact that random forests are randomized and are not perfectly replicable if the code is re-run.
+- considering that Github only allows the upload of files of up to 50MB, only the subsets with the songs of 2000-2021 and 2021 are uploaded. The original complete dataset "tracks.csv" can be found on https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks.
