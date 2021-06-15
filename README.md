@@ -6,7 +6,7 @@ This repository contains an R-notebook for the music popularity prediction perfo
 The aim of this thesis is to assess the performance of a Random Forest (RF) regression in accurately predicting the popularity score of 203,382 contemporary songs (2000-2021) as extracted through the Spotify-API.
 To make more nuanced inferences, the performance of the RF is compared to that of a simpler Multiple Linear Regression (MLR). Additionally, a RF is created on a further subset containing only songs released in 2021 (5,142 observations). 
 
-Ultimately, the RF is also used to render a Variable Importance (VI) score for each independent variable.
+Ultimately, the RF using the tracks from 2000-2021 is also used to render a Variable Importance (VI) score for each independent variable.
 
 
 Notes:
