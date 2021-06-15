@@ -11,4 +11,4 @@ Ultimately, the RF is also used to render a Variable Importance (VI) score for e
 
 Notes:
 - the results displayed in the uploaded pdf- and HTML-file deviate from the results described and shown in the Thesis paper, as the code needed to be run again to knit the Rmd-document into the alternative format. This means that the random train-test splits and subsequent CV-folds were different from the original one, resulting in the deviation. Nevertheless, the screenshots of the initial R-output can be found in the folder "Tables and Graphs".
-- considering that Github only allows the upload of files of up to 50MB, only the subsets with the songs of 2000-2021 and 2021 are uploaded. The original complete dataset "tracks.csv" can be found on https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks.
+- considering that Github only allows the upload of files of up to 50MB, the initial csv-file containing the tracks and features cannot be uploaded. The original complete dataset "tracks.csv" can be found on https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks.
