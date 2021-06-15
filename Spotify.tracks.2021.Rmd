@@ -534,15 +534,6 @@ rf.var.importance.fit.no.year %>% pull_workflow_fit() %>% vi()
 rf.var.importance.fit.no.year %>% pull_workflow_fit() %>% vip(geom = "point", num_features = 10)
 ```
 
-
-```{r include=FALSE}
-write.csv(tracks.2k, row.names = FALSE)
-
-write.csv(tracks.2021, row.names = FALSE)
-```
-
-
-
 ```{r}
 rf.predictions.2021 <- final.res.2021 %>% collect_predictions()
 
@@ -550,4 +541,3 @@ rf.predictions.2021$residuals <- rf.predictions.2021$popularity - rf.predictions
 
 plot(rf.predictions.2021$residuals, type = "prediction", abline = TRUE, xlab = "Observations", ylab = "Residuals")
 ```
-
