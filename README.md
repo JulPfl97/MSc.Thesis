@@ -1,4 +1,4 @@
-# MSc Thesis - Music Popularity prediction using Random Forest regressions
+# MSc Thesis - Predicting the popularity of songs using Random Forest regressions
 
 
 This repository contains an R-notebook for the music popularity prediction performed as part of my MSc Thesis in Business Analytics and Management at the Rotterdam School of Management (EUR).
